@@ -1,19 +1,22 @@
 import enoki as ek
 import numpy as np
 
-"""
-Build kernel matrix for calculation of micro-facet Normal Distribution
-Function
+# Minimal divison coefficient
+EPSILON = 1e-4
 
+
+"""
+Build kernel matrix for calculation of micro-facet
+Normal Distribution Function (NDF).
 params:
     @frC = cosign weighted BSDF mesurements
     @n_theta = elevation samples of input
     @n_phi = azimuth samples of input / calculation
     @isotropic = material property isotropic
 return:
-    @K = kernel matrix
+    @K = NDF kernel matrix
 """
-def build_kernel(frC, n_theta, n_phi, isotropic):
+def build_ndf_kernel(frC, n_theta, n_phi, isotropic):
     N = frC.size
     # Build kernel matrix
     K = np.zeros((N,N))
@@ -23,36 +26,144 @@ def build_kernel(frC, n_theta, n_phi, isotropic):
             raise("Error: Grid dimensions do not match BRDF mesurements!")
         from scipy.integrate import trapz
         # Interpolation grid
-        theta_m = u2theta(np.linspace(0, 1, n_theta))
-        phi_m = u2phi(np.linspace(0, 1, n_phi))
-        dphi = phi_m[1] - phi_m[0]      # constant phi increment
+        theta = u2theta(np.linspace(0, 1, n_theta))
+        phi = u2phi(np.linspace(0, 1, n_phi))
+        dphi = 2 * np.pi / (n_phi - 1)      # constant increments (= phi[1]-phi[0])
 
         # Directions of resulting kernel (only dependant on theta)
         # phi = 0 (arbitrary choice)
-        omega = np.column_stack((np.sin(theta_m),
+        omega = np.column_stack((np.sin(theta),
                                  np.zeros(n_theta),
-                                 np.cos(theta_m)))
+                                 np.cos(theta)))
         for j in range(N):
             # Integrate over phi_m [-pi, pi]
-            sin_theta_m, cos_theta_m = (np.sin(theta_m[j]), np.cos(theta_m[j]))
-            sin_phi_m, cos_phi_m = (np.sin(phi_m), np.cos(phi_m))
+            sin_phi_m, cos_phi_m = (np.sin(phi), np.cos(phi))
 
-            omega_m = np.vstack((cos_phi_m * sin_theta_m,
-                                 sin_phi_m * sin_theta_m,
-                                 cos_theta_m * np.ones(n_phi)))
-            tmp = np.matmul(omega, omega_m).clip(0, None) * sin_theta_m
+            omega_m = np.vstack((cos_phi_m * omega[j, 0],
+                                 sin_phi_m * omega[j, 0],
+                                 omega[j, 2] * np.ones(n_phi)))
+            tmp = np.matmul(omega, omega_m).clip(0, None) * omega[j, 0]
             integral = trapz(tmp, dx=dphi, axis=1)
 
             # Calculate kernel
-            K[:, j] = weights * frC * integral
+            K[:, j] = weights[j] * frC * integral
     else:
         if (n_theta * n_phi) != N:
             raise("Error: Grid dimensions do not match BRDF mesurements!")
         _, _, omega_m = grid_sample(n_theta, n_phi)
         for j in range(N):
             # Calculate kernel
-            K[:, j] = weights * frC * np.dot(omega_m, omega_m[j]).clip(0, None)
+            K[:, j] = weights[j] * frC * np.dot(omega_m, omega_m[j]).clip(0, None)
     return K
+
+
+"""
+Build kernel matrix for calculation of slopes of
+micro-facet Normal Distribution Function (NDF).
+Corresponds to the Probability Density Function (PDF).
+params:
+    @frC = cosign weighted BSDF mesurements
+    @n_theta = elevation samples of input
+    @n_phi = azimuth samples of input / calculation
+    @isotropic = material property isotropic
+return:
+    @K = PDF kernel matrix
+"""
+def build_slope_kernel(frC, n_theta, n_phi, isotropic):
+    N = frC.size
+    # Build kernel matrix
+    K = np.zeros((N,N))
+    if isotropic:
+        if n_theta != N:
+            raise("Error: Grid dimensions do not match BRDF mesurements!")
+        from scipy.integrate import trapz
+        # Interpolation grid
+        theta = u2theta(np.linspace(0, 1, n_theta))
+        phi = u2phi(np.linspace(0, 1, n_phi))
+        dphi = 2 * np.pi / (n_phi - 1)      # constant increments (= phi[1]-phi[0])
+        # Directions of resulting kernel (only dependant on theta)
+        # phi = 0 (arbitrary choice)
+        omega = np.column_stack((np.sin(theta),
+                                 np.zeros(n_theta),
+                                 np.cos(theta)))
+        for j in range(N):
+            # Integrate over phi_m [-pi, pi]
+            if omega[j, 2] > EPSILON:
+                sin_phi_m, cos_phi_m = (np.sin(phi), np.cos(phi))
+
+                omega_m = np.vstack((cos_phi_m * omega[j, 0],
+                                     sin_phi_m * omega[j, 0],
+                                     omega[j, 2] * np.ones(n_phi)))
+                tmp = np.matmul(omega, omega_m).clip(0, None)
+                integral = trapz(tmp, dx=dphi, axis=1)
+
+                # Calculate kernel
+                K_ = frC * integral / np.power(omega[j, 2], 4)
+                K[:, j] = K_ * omega[j, 0] * np.power(omega[:,2], 4)
+    else:
+        if (n_theta * n_phi) != N:
+            raise("Error: Grid dimensions do not match BRDF mesurements!")
+        _, phi_m, omega_m = grid_sample(n_theta, n_phi)
+        sin_phi_m = np.sin(phi_m)
+        for j in range(N):
+            if omega_m[j, 2] > EPSILON:
+                # Calculate kernel
+                K_ = (frC * np.dot(omega_m, omega_m[j]).clip(0, None) 
+                      / np.power(omega[j, 2], 4))
+                K[:, j] = K_ * np.power(omega[:,2], 4)           
+    return K
+
+
+
+
+"""
+Normalize NDF slopes.
+Integral over R^2 space of PDF must equal 1.
+Equivalent to integral over hemisphere of
+NDF * cos(theta).
+params:
+    @P_in = NDF slopes
+    @isotropic = material property isotropic
+return:
+    @P = normalized NDF slopes
+"""
+def normalize_slopes(P_in, isotropic):
+    from scipy.integrate import trapz
+    # Get dimensions from slope PDF
+    P = P_in
+    n_theta = P.shape[1]
+    n_phi = P.shape[0]
+    theta = u2theta(np.linspace(0, 1, n_theta))
+    phi = u2theta(np.linspace(0, 1, n_theta))
+    if isotropic:
+        dphi = 2 * np.pi
+        tmp = np.zeros(n_theta)
+        for i in range(n_theta):
+            r = np.tan(theta[i])
+            cos_theta = np.cos(theta[i])
+            if cos_theta > EPSILON:
+                tmp[i] = r * P[0, i] / np.power(cos_theta, 2)
+        integral = trapz(tmp, theta)  # integrate over dtheta
+        integral *= dphi  # integrate over dphi
+    else:
+        dphi = 2 * np.pi / (n_phi - 1)  # constant increments (phi[1]-phi[0])
+        integral = 0.
+        for i in range(n_phi):
+            tmp = np.zeros(n_theta)
+            for j in range(n_theta):
+                r = np.tan(theta[j])
+                cos_theta = np.cos(theta[j])
+                if cos_theta > EPSILON:
+                    tmp[j] = r * P[i, j] / np.power(cos_theta, 2)
+            integral += trapz(tmp, theta)  # integrate over dtheta
+        # TODO: check factor 2
+        integral *= dphi  # integrate over dphi
+    # Normalize PDF
+    assert(integral > 0.)
+    integral = 1. / integral
+    P *= integral
+    return P
+
 
 """
 Compute projected area of micro-facets as nomalisation
@@ -373,15 +484,15 @@ return
 """
 def grid_sample(n_theta, n_phi):
     # Create uniform samples and warp by G2 mapping
-    u_m = np.meshgrid(np.linspace(0, 1, n_theta), np.linspace(0, 1, n_phi))
-    theta_m = u2theta(u_m[0]).flatten()
-    phi_m = u2phi(u_m[1]).flatten()
+    u = np.meshgrid(np.linspace(0, 1, n_theta), np.linspace(0, 1, n_phi))
+    theta = u2theta(u[0]).flatten()
+    phi = u2phi(u[1]).flatten()
 
     # Create quadrature nodes (Spherical -> Cartesian coordinates)
-    sin_theta_m, cos_theta_m = (np.sin(theta_m), np.cos(theta_m))
-    sin_phi_m, cos_phi_m = (np.sin(phi_m), np.cos(phi_m))
+    sin_theta, cos_theta = (np.sin(theta), np.cos(theta))
+    sin_phi, cos_phi = (np.sin(phi), np.cos(phi))
 
-    omega_m = np.column_stack((cos_phi_m * sin_theta_m,
-                               sin_phi_m * sin_theta_m,
-                               cos_theta_m))
-    return theta_m, phi_m, omega_m
+    omega = np.column_stack((cos_phi * sin_theta,
+                             sin_phi * sin_theta,
+                             cos_theta))
+    return theta, phi, omega
