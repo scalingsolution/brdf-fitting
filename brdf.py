@@ -10,8 +10,8 @@ Build kernel matrix for calculation of micro-facet
 Normal Distribution Function (NDF).
 params:
     @frC = cosign weighted BSDF mesurements
-    @n_theta = elevation samples of input
-    @n_phi = azimuth samples of input / calculation
+    @n_theta = number of elevation samples of input
+    @n_phi = number of azimuth samples of input (or calculation if isotropic)
     @isotropic = material property isotropic
 return:
     @K = NDF kernel matrix
@@ -63,8 +63,8 @@ micro-facet Normal Distribution Function (NDF).
 Corresponds to the Probability Density Function (PDF).
 params:
     @frC = cosign weighted BSDF mesurements
-    @n_theta = elevation samples of input
-    @n_phi = azimuth samples of input / calculation
+    @n_theta = number of elevation samples of input
+    @n_phi = number of azimuth samples of input (or calculation if isotropic)
     @isotropic = material property isotropic
 return:
     @K = PDF kernel matrix
@@ -163,6 +163,230 @@ def normalize_slopes(P_in, isotropic):
     integral = 1. / integral
     P *= integral
     return P
+
+"""
+Fit Beckmann parameters to normalized NDF slopes.
+Mean surface normals for non-centeral BRDFs are
+currently only implemented for anisotropic materials. 
+params:
+    @P_in = normalized NDF slopes
+    @isotropic = material property isotropic
+return:
+    @a_x = x-dirction RMS slope
+    @a_y = y-dirction RMS slope
+    @rho = correlation coefficient
+    @x_n = mean surface normal x-component
+    @y_n = mean surface normal y-component
+"""
+def beckmann_parameters(P_in, isotropic):
+    from scipy.integrate import trapz
+    # Get dimensions from slope PDF
+    P = P_in
+    n_theta = P.shape[1]
+    n_phi = P.shape[0]
+    theta = u2theta(np.linspace(0, 1, n_theta))
+    phi = u2theta(np.linspace(0, 1, n_theta))
+    if isotropic:
+        tmp = np.zeros(n_theta)
+        for i in range(n_theta):
+            r = np.tan(theta[i])
+            cos_theta = np.cos(theta[i])
+            if cos_theta > EPSILON:
+                tmp[i] = np.power(r, 3) * P[0, i] / np.power(cos_theta, 2)
+        integral = trapz(tmp, theta)
+        integral *= np.pi               # = int_0^2pi(cos^2(phi))dphi
+        a_x = np.sqrt(2. * integral)
+        a_y = a_x
+        rho = 0
+        # TODO: add shear parameter to isotropic
+        x_n = 0
+        y_n = 0
+    else:
+        E = np.zeros(5)                 # moments for extracting Beckmann params
+        dphi = 2 * np.pi / (n_phi - 1)  # constant increments (phi[1]-phi[0])
+        for i in range(n_phi):
+            cos_phi = np.cos(phi[i])
+            sin_phi = np.sin(phi[i])
+            tmp = np.zeros((5, n_theta))
+            for j in range(n_theta):
+                r = np.tan(theta[j])
+                r_sqr = np.power(r, 2)
+                cos_theta = np.cos(theta[j])
+                sin_theta = np.sin(theta[j])
+                if cos_theta > EPSILON:
+                    tmp1 = r * P[i, j] / np.power(cos_theta, 2)
+                    tmp[0, j] = tmp1 * -r * cos_phi                     # x_n
+                    tmp[1, j] = tmp1 * -r * sin_phi                     # y_n
+                    tmp[2, j] = tmp1 * r_sqr * np.power(cos_phi, 2)
+                    tmp[3, j] = tmp1 * r_sqr * np.power(sin_phi, 2) 
+                    tmp[4, j] = tmp1 * r_sqr * sin_phi * cos_phi 
+            E += trapz(tmp, theta, axis=1)  # integrate over dtheta
+        # TODO: check factor 2
+        E *= dphi   # integrate over dphi
+        x_n = E[0]
+        y_n = E[1]
+        a_x = np.sqrt(2. * (E[2] - np.power(x_n, 2)))
+        a_y = np.sqrt(2. * (E[3] - np.power(y_n, 2)))
+        rho = 2. * (E[4] - x_n * y_n) / (a_x * a_y)
+    return [a_x, a_y, rho, x_n, y_n]
+
+
+"""
+Fit GGX parameters to normalized NDF slopes.
+Mean surface normals for non-centeral BRDFs are
+currently only implemented for anisotropic materials. 
+params:
+    @P_in = normalized NDF slopes
+    @isotropic = material property isotropic
+return:
+    @a_x = x-dirction RMS slope
+    @a_y = y-dirction RMS slope
+    @rho = correlation coefficient (not implemented)
+    @x_n = mean surface normal x-component
+    @y_n = mean surface normal y-component
+"""
+def ggx_parameters(P_in, isotropic):
+    from scipy.integrate import trapz
+    # Get dimensions from slope PDF
+    P = P_in
+    n_theta = P.shape[1]
+    n_phi = P.shape[0]
+    theta = u2theta(np.linspace(0, 1, n_theta))
+    phi = u2theta(np.linspace(0, 1, n_theta))
+    if isotropic:
+        dphi = 2 * np.pi
+        tmp = np.zeros(n_theta)
+        for i in range(n_theta):
+            r = np.tan(theta[i])
+            cos_theta = np.cos(theta[i])
+            if cos_theta > EPSILON:
+                tmp[i] = np.power(r, 2) * P[0, i] / np.power(cos_theta, 2)
+        integral = trapz(tmp, theta)
+        integral *= 4                   # = int_0^2pi(|cos(phi)|)dphi
+        a_x = integral
+        a_y = a_x
+        rho = 0
+        # TODO: add shear parameter to isotropic
+        x_n = 0
+        y_n = 0
+    else:
+        E = np.zeros(5)                 # moments for extracting Beckmann params
+        dphi = 2 * np.pi / (n_phi - 1)  # constant increments (phi[1]-phi[0])
+        for i in range(n_phi):
+            cos_phi = np.cos(phi[i])
+            sin_phi = np.sin(phi[i])
+            tmp = np.zeros((5, n_theta))
+            for j in range(n_theta):
+                r = np.tan(theta[j])
+                r_sqr = np.power(r, 2)
+                cos_theta = np.cos(theta[j])
+                sin_theta = np.sin(theta[j])
+                if cos_theta > EPSILON:
+                    tmp1 = r * P[i, j] / np.power(cos_theta, 2)
+                    tmp[0, j] = tmp1 * -r * cos_phi         # x_n
+                    tmp[1, j] = tmp1 * -r * sin_phi         # y_n
+                    tmp[2, j] = abs(tmp[0, j])
+                    tmp[3, j] = abs(tmp[1, j]) 
+                    tmp[4, j] = 0                           # TODO
+            E += trapz(tmp, theta, axis=1)  # integrate over dtheta
+        # TODO: check factor 2
+        E *= dphi   # integrate over dphi
+        x_n = E[0]
+        y_n = E[1]
+        a_x = np.sqrt(np.power(E[2], 2) - np.power(x_n, 2))
+        a_y = np.sqrt(np.power(E[3], 2) - np.power(y_n, 2))
+        rho = 0     # TODO
+    return [a_x, a_y, rho, x_n, y_n]
+
+
+"""
+Evaluate micro-facet distribution model.
+Samples are warped by G2 mapping before
+converting to Carthesian direction and
+evaluating distribution model.
+params:
+    @n_theta = sample elevation resolution
+    @n_phi = sample azimuth resolution (if isotropic: ignored)
+    @alpha = roughness parameter (if isotropic: [alpha_x, alpha_y])
+    @isotropic = material property isotropic
+    @md_type = micro-facet model type ('beckmann' or 'ggx')
+return:
+    @D = sampled micro-facet distribution
+"""
+def eval_md_model(n_theta, n_phi, alpha, isotropic, md_type="beckmann"):
+    from mitsuba.render import MicrofacetDistribution, MicrofacetType
+    if md_type == "beckmann":
+        md_t = MicrofacetType.Beckmann
+    elif md_type == "ggx":
+        md_t = MicrofacetType.GGX
+    else:
+        print("WARNING: Unknown micro-facet type, returning None.")
+        return None
+    if isotropic:
+        m_D = MicrofacetDistribution(md_t, alpha, False)
+        _, _, omega = grid_sample(n_theta, 1)
+        D = m_D.eval(omega)
+        D = np.vstack((D, D))
+    else:
+        m_D = MicrofacetDistribution(md_t, alpha[0], alpha[1], False)
+        _, _, omega = grid_sample(n_theta, n_phi)
+        D = m_D.eval(omega)
+        D = np.reshape(D, (n_phi, n_theta))
+    #print(alpha)
+    #print(omega)
+    return D
+
+
+"""
+Evaluate micro-facet distribution.
+Specified resolution will be warped by G2 mapping,
+before converting to Carthesian direction.
+params:
+    @n_theta = sample elvation resolution
+    @n_phi = sample azimuth resolution (if isotropic: ignored)
+    @D_in = micro-facet NDF
+    @isotropic = material property isotropic
+return:
+    @D = sampled micro-facet NDF
+"""
+def eval_md(n_theta, n_phi, D_in, isotropic):
+    from mitsuba.render import MarginalContinuous2D0
+    m_D = MarginalContinuous2D0(D_in, normalize=False)
+    u = np.meshgrid(np.linspace(0, 1, n_theta), np.linspace(0, 1, n_phi))
+    u_0 = u[0].flatten()
+    u_1 = u[1].flatten()
+    sample = Vector2f(u_0, u_1)
+    D = m_D.eval(samples)
+    if isotropic:
+        D = np.vstack((D, D))
+    else:
+        D = np.reshape(D, (n_phi, n_theta))
+    return D
+
+
+"""
+Return major axis of laser spot on probe from
+laser beam diameter and incident elevation.
+params:
+    @d = laser beam diameter
+    @theta = incident elevation (on probe)
+return:
+    laser spot major axis (on probe)
+"""
+def effective_spot_size(d, theta):
+    return d / np.sin(theta) 
+
+"""
+Return maximal elevation for retroreflective measurements,
+based on laser beam diameter and probe diameter.
+params:
+    @d = laser beam diameter
+    @w = width of probe in rotation direction
+return:
+    maximal elevation angle (on probe)
+"""
+def max_elevation(d, w):
+    return np.arcsin(d / w)
 
 
 """
@@ -272,6 +496,19 @@ def spherical2cartesian(theta, phi):
     return omega
 
 
+def elevation(d):
+    dist = ek.sqrt(ek.sqr(d.x) + ek.sqr(d.y) + ek.sqr(d.z - 1.))
+    return 2. * ek.safe_asin(.5 * dist);
+
+
+def cartesian2spherical(w):
+    # Convert: Cartesian coordinates -> Spherical
+    theta  = elevation(w) #ek.acos(w.z)
+    phi  = ek.atan2(w.y, w.x)
+    phi = ek.select(phi+ek.pi < 1e-4, ek.pi, phi)
+    return theta, phi
+
+
 def sphere_surface_patch(r, dtheta, dphi):
     # Hemisphere surface area
     h = 2 * np.pi * np.square(r)
@@ -342,7 +579,7 @@ def visible_ndf(D, sigma, theta_i, phi_i, isotropic):
 
 def vndf_intp2sample(Dvis_intp):
     # Check dimensions of micro-facet model
-    Dvis_sample = np.zeros(Dvis_intp.shape)
+    Dvis_sampler = np.zeros(Dvis_intp.shape)
 
     # Create uniform samples and warp by G2 mapping
     n_theta = Dvis_intp.shape[3]
@@ -351,8 +588,8 @@ def vndf_intp2sample(Dvis_intp):
     # Apply Jacobian correction factor to interpolants
     for l in range(n_theta):
         jc = np.sqrt(8 * np.power(np.pi, 3) * theta_m[l]) * np.sin(theta_m[l])
-        Dvis_sample[:, :, :, l] = Dvis_intp[:, :, :, l] * jc / (n_theta * n_theta)
-    return Dvis_sample
+        Dvis_sampler[:, :, :, l] = Dvis_intp[:, :, :, l] * jc / (n_theta * n_theta)
+    return Dvis_sampler
 
 
 def ndf_intp2sample(D_intp):
@@ -496,3 +733,167 @@ def grid_sample(n_theta, n_phi):
                              sin_phi * sin_theta,
                              cos_theta))
     return theta, phi, omega
+
+
+"""
+Generate incident elevation samples based on inverse sigma distribution.
+
+params:
+    @n = number of samples for incident direction
+    @sigma = projected area of micro-facets
+return
+    @theta_i = incident elevations
+"""
+def incident_elevation(n, sigma):
+    from mitsuba.core import Float, Vector2f
+    from mitsuba.core import MarginalContinuous2D0
+    # Construct projected surface area interpolant data structure
+    sigma_sampler = ndf_intp2sample(sigma)
+    m_sigma = MarginalContinuous2D0(sigma_sampler, normalize=False)
+
+    # Warp samples by projected area
+    samples = Vector2f(np.linspace(0, 1, n), 0.5)
+    u_m, _ = m_sigma.sample(samples)
+
+    # Map samples to sphere
+    theta_i = u2theta(u_m[0]) #(np.pi - u_m[0] * np.pi) / 2
+    return theta_i
+
+
+"""
+Compute outgoing direction samples from visible NDF.
+
+params:
+    @n_phi = number of outgoing azimuth samples per incident direction slice
+    @n_phi = number of outgoing elevation samples per incident direction slice
+    @Dvis_sampler = jacobian corrected visible NDF for sample generation
+    @phi_i = incident azimuth [rad]
+    @theta_i = incident elevation [rad]
+    @isotropic = material property isotropic
+return
+    @theta_o = outgoing elevation [rad]
+    @phi_o = outgoing azimuth [rad]
+    @active = valid outgoing directions
+"""
+def outgoing_direction(n_phi, n_theta, Dvis_sampler, phi_i, theta_i, isotropic):
+    from mitsuba.core import Vector2f, Frame3f
+    from mitsuba.core import MarginalContinuous2D2
+
+    MAX_ELEVATION = 85
+    phi_o = np.zeros((phi_i.size, theta_i.size, n_phi, n_theta))
+    theta_o = np.zeros((phi_i.size, theta_i.size, n_phi, n_theta))
+    active = np.ones((phi_i.size, theta_i.size, n_phi, n_theta), dtype='bool')
+
+    # Create uniform samples
+    u_0 = np.linspace(0, 1, n_theta)
+    u_1 = np.linspace(0, 1, n_phi)
+    samples = Vector2f(np.tile(u_0, n_phi), np.repeat(u_1, n_theta))
+
+    # Construct projected surface area interpolant data structure
+    params = [phi_i.tolist(), theta_i.tolist()]
+    m_vndf = MarginalContinuous2D2(Dvis_sampler, params, normalize=True)
+
+    for i in range(phi_i.size):
+        for j in range(theta_i.size):
+            # Warp uniform samples by VNDF distribution (G1 mapping) 
+            u_m, ndf_pdf = m_vndf.sample(samples, [phi_i[i], theta_i[j]])
+            # Convert samples to radians (G2 mapping)
+            theta_m = u2theta(u_m.x)    # [0, 1] -> [0, pi]
+            phi_m = u2phi(u_m.y)        # [0, 1] -> [0, 2pi]
+            if isotropic:
+                phi_m += phi_i[i]               
+            # Phase vector
+            m = spherical2cartesian(theta_m, phi_m)
+            # Incident direction
+            wi = spherical2cartesian(theta_i[j], phi_i[i])
+            # Outgoing direction (reflection over phase vector)
+            wo = ek.fmsub(m, 2.0 * ek.dot(m, wi), wi)
+            tmp1, tmp2 = cartesian2spherical(wo)
+            # Remove invalid directions
+            act = Frame3f.cos_theta(wo) > 0
+            act &= tmp1 < (MAX_ELEVATION / 180 * np.pi)
+            if isotropic:
+                act &= tmp2 > 0 #, np.abs(tmp2) np.logical_or( - np.pi < 1e-4)
+            # Fit to datashape
+            act = np.reshape(act, (n_phi, n_theta))
+            tmp1 = np.reshape(tmp1, (n_phi, n_theta))
+            tmp2 = np.reshape(tmp2, (n_phi, n_theta))
+            tmp1[~act] = 0
+            tmp2[~act] = 0
+            theta_o[i, j] = tmp1
+            phi_o[i, j] = tmp2
+            active[i, j] = act
+    return [theta_o, phi_o, active]
+
+
+"""
+Weight spectral measurements by inverse jacobian of mapping.
+
+params:
+    @spec = spectral measurements
+    @D = micro-facet Normal Distribution Function (NDF)
+    @sigma = projected area of micro-facets
+    @phi_i = incident azimuth [rad]
+    @theta_i = incident elevation [rad]
+    @theta_o = outgoing elevation [rad]
+    @phi_o = outgoing azimuth [rad]
+    @active = valid outgoing directions
+return
+    @scaled = weighted spectral measurements
+"""
+def weight_measurements(spec, D, sigma, phi_i, theta_i, phi_o, theta_o, active):
+    from mitsuba.core import MarginalContinuous2D0, Vector2f
+    m_ndf = MarginalContinuous2D0(D, normalize=False)
+    m_sigma = MarginalContinuous2D0(sigma, normalize=False)
+    scaled = np.zeros(spec.shape)
+    n_wavelengths = spec.shape[2]
+    n_phi = spec.shape[3]
+    n_theta = spec.shape[4]
+
+    for i in range(phi_i.size):
+        for j in range(theta_i.size):
+            # Incient direction
+            wi = spherical2cartesian(theta_i[j], phi_i[i])
+            u_wi = Vector2f(theta2u(theta_i[j]), phi2u(phi_i[i]))   
+            # Outgoing direction
+            wo = spherical2cartesian(theta_o[i, j].flatten(), phi_o[i, j].flatten())
+            # Phase direction
+            m = ek.normalize(wi + wo)
+            theta_m, phi_m = cartesian2spherical(wo)
+            u_m = Vector2f(theta2u(theta_m), phi2u(phi_m))
+            # Scale by inverse jacobian
+            jacobian = m_ndf.eval(u_m) / (4 * m_sigma.eval(u_wi))
+            jacobian = np.reshape(jacobian, (n_phi, n_theta))
+            for k in range(n_wavelengths): 
+                scaled[i, j, k] = spec[i, j, k] / jacobian
+    for k in range(n_wavelengths): 
+        scaled[:, :, k][~active] = 0 
+    return scaled
+
+
+"""
+Calculate luminoscity of spectral measurements, by integrating
+over wavelength range.
+
+params:
+    @spec = spectral measurements
+    @wavelengths = wavelengths used for spectral measurements
+return
+    @luminoscity = luminoscity
+"""
+def integrate_spectrum(spec, wavelengths):
+    from scipy.integrate import trapz
+    n_phi_i = spec.shape[0]
+    n_theta_i = spec.shape[1]
+    n_phi_o = spec.shape[3]
+    n_theta_o = spec.shape[4]
+    luminoscity = np.zeros((n_phi_i, n_theta_i, n_phi_o, n_theta_o))
+    x = wavelengths #np.repeat(wavelengths, n_phi_o * n_theta_o)
+    span = x.max() - x.min()
+    for i in range(n_phi_i):
+        for j in range(n_theta_i):
+            y = spec[i, j]
+            y.reshape(-1, *y.shape[-2:])
+            integral = trapz(y, x, axis=0) / span
+            luminoscity[i, j] = np.reshape(integral, (n_phi_o, n_theta_o))
+    return luminoscity
