@@ -1,17 +1,17 @@
 import pytest
-
+import pickle
 import numpy as np
-from visualize import read_tensor
+from visualize import read_tensor, write_tensor
 from brdf import (EPSILON, grid_sample, projected_area, sphere_surface_patch,
                   visible_ndf, build_ndf_kernel, build_slope_kernel,
                   power_iteration, vndf_intp2sample, ndf_intp2sample,
                   normalize_slopes, normalize_2D, normalize_4D,
                   incident_elevation, outgoing_direction, weight_measurements,
                   integrate_spectrum)
-
 import mitsuba
 # Set the any mitsuba variant
 mitsuba.set_variant('packet_spectral')
+
 
 @pytest.mark.parametrize("n_theta", [128, 64])
 @pytest.mark.parametrize("n_phi", [1, 64])
@@ -59,7 +59,6 @@ def test03_sphere_integration(n_theta, n_phi, isotropic):
 @pytest.mark.parametrize("filename", ["bin/spectralon.pickle"])
 def test04_sigma_isotropic(filename):
     # Read raw measurement data from disk
-    import pickle
     data = pickle.load(open(filename, "rb"))
 
     # Create input values
@@ -80,7 +79,6 @@ def test04_sigma_isotropic(filename):
 @pytest.mark.parametrize("filename", ["bin/spectralon.pickle"])
 def test05_ndf_sampler(filename):
     # Read raw measurement data from disk
-    import pickle
     data = pickle.load(open(filename, "rb"))
 
     # Get measurement values
@@ -97,7 +95,6 @@ def test05_ndf_sampler(filename):
 @pytest.mark.parametrize("filename", ["bin/spectralon.pickle"])
 def test06_vndf_sampler(filename):
     # Read raw measurement data from disk
-    import pickle
     data = pickle.load(open(filename, "rb"))
 
     # Get measurement values
@@ -119,7 +116,6 @@ TODO:   Fix error in NDF/slope calculation.
 @pytest.mark.parametrize("filename", ["bin/spectralon.pickle"])
 def test07_ndf_isotropic(filename):
     # Read raw measurement data from disk
-    import pickle
     data = pickle.load(open(filename, "rb"))
 
     isotropic = data['isotropic']
@@ -171,7 +167,6 @@ def test07_ndf_isotropic(filename):
 @pytest.mark.parametrize("filename", ["bin/spectralon.pickle"])
 def test08_slopes_isotropic(filename):
     # Read raw measurement data from disk
-    import pickle
     data = pickle.load(open(filename, "rb"))
 
     isotropic = data['isotropic']
@@ -218,7 +213,6 @@ def test08_slopes_isotropic(filename):
 @pytest.mark.parametrize("filename", ["bin/spectralon.pickle"])
 def test09_vndf_interpolate(filename):
     # Read raw measurement data from disk
-    import pickle
     data = pickle.load(open(filename, "rb"))
 
     isotropic = data['isotropic']
@@ -243,6 +237,7 @@ def test09_vndf_interpolate(filename):
     assert(Dvis.shape == Dvis_c.shape)
     assert((error < 1e-4).all())
 
+
 # TODO: fix sampling
 @pytest.mark.parametrize("filename", ["bin/spectralon_spec.bsdf"])
 def test10_incident_elevation(filename):
@@ -258,12 +253,69 @@ def test10_incident_elevation(filename):
     assert(theta_i_c.shape == theta_i.shape)
     assert((error < 5e-1).all())
 
-# TODO: adapt black/white level for spectral measurements
-# TODO: fix integration
+
 @pytest.mark.parametrize("filename", ["bin/spectralon.pickle"])
-def test11_spectral_samples_isotropic(filename):
+def test11_outgoing_samples_isotropic(filename):
     # Read raw measurement data from disk
-    import pickle
+    data = pickle.load(open(filename, "rb"))
+
+    # Get dimensions of BRDF measurements
+    isotropic = data['isotropic']
+    R = 32 if isotropic else 64
+
+    Dvis_sampler = data["vndf_sampler"]
+    sigma = data["sigma"]
+
+    # Spectral measurements
+    n_theta_i = data['theta_i_res']
+    n_phi_i = data['phi_i_res']
+    phi_i = np.zeros(n_phi_i)
+    theta_i = np.zeros(n_theta_i)
+    phi_o = np.zeros((n_phi_i, n_theta_i, R, R))
+    theta_o = np.zeros((n_phi_i, n_theta_i, R, R))
+    for key, value in data.items():
+        if key[0] == 'spectra':
+            phi_i[key[1]] = np.radians(value[0][0])
+            theta_i[key[2]] = np.radians(value[0][1])
+            phi_o[key[1], key[2], key[3], key[4]] = np.radians(value[0][2])
+            theta_o[key[1], key[2], key[3], key[4]] = np.radians(value[0][3])
+
+    # Compute sample positions
+    theta_o_c, phi_o_c, active = outgoing_direction(R, R, Dvis_sampler, phi_i, theta_i, isotropic)
+
+    # Horizontal slice of samples is interpolated
+    # (set to 0 for measured data)
+    error_phi_o = phi_o[:, 0:-1] - phi_o_c[:, 0:-1]
+    error_theta_o = theta_o[:, 0:-1] - theta_o_c[:, 0:-1]
+    assert((error_phi_o < 1e-4).all())
+    assert((error_theta_o < 1e-4).all())
+
+
+@pytest.mark.parametrize("filename", ["bin/spectralon.pickle"])
+def test12_spectral_wavlengths_isotropic(filename):
+    # Read raw measurement data from disk
+    data = pickle.load(open(filename, "rb"))
+
+    # Wavelengths (usable spectral range)
+    wavelengths = np.array(data['wavelengths'])
+    wl_min_idx = np.argmin(np.abs(wavelengths - 359.))
+    wl_max_idx = np.argmin(np.abs(wavelengths - 1001.))
+    wavelengths = wavelengths[wl_min_idx:wl_max_idx+1]
+
+    # Read tensor file from disc
+    reference = filename.rsplit('.', 1)[0] + "_spec.bsdf"
+    tensor = read_tensor(reference)
+    wavelengths_ref = tensor["wavelengths"]
+    
+    error = np.abs(wavelengths_ref - wavelengths)
+    assert(wavelengths_ref.shape == wavelengths.shape)
+    assert((error < 1e-4).all())
+
+
+# TODO: adapt black/white level for spectral measurements
+@pytest.mark.parametrize("filename", ["bin/spectralon.pickle"])
+def test13_spectral_measurements_isotropic(filename):
+    # Read raw measurement data from disk
     data = pickle.load(open(filename, "rb"))
 
     # Get dimensions of BRDF measurements
@@ -281,57 +333,77 @@ def test11_spectral_samples_isotropic(filename):
     wl_max_idx = np.argmin(np.abs(wavelengths - 1001.))
     wavelengths = wavelengths[wl_min_idx:wl_max_idx+1]
 
+    # Read tensor file from disc
+    reference = filename.rsplit('.', 1)[0] + "_spec.bsdf"
+    tensor = read_tensor(reference)
+    spec_ref = tensor["spectra"]
+
     # Spectral measurements
     n_theta_i = data['theta_i_res']
     n_phi_i = data['phi_i_res']
     phi_i = np.zeros(n_phi_i)
     theta_i = np.zeros(n_theta_i)
-    phi_o = np.zeros((n_phi_i, n_theta_i, R, R))
-    theta_o = np.zeros((n_phi_i, n_theta_i, R, R))
     spec = np.zeros((n_phi_i, n_theta_i, wavelengths.size, R, R))
     for key, value in data.items():
         if key[0] == 'spectra':
             phi_i[key[1]] = np.radians(value[0][0])
             theta_i[key[2]] = np.radians(value[0][1])
-            phi_o[key[1], key[2], key[3], key[4]] = np.radians(value[0][2])
-            theta_o[key[1], key[2], key[3], key[4]] = np.radians(value[0][3])
             spec[int(key[1]), int(key[2]), :, int(key[3]), int(key[4])] = \
             value[1][wl_min_idx:wl_max_idx+1]
 
 
     # Compute sample positions
-    theta_o_c, phi_o_c, active = outgoing_direction(R, R, Dvis_sampler, phi_i, theta_i, isotropic)
-
-    # Horizontal slice of samples is interpolated
-    # (set to 0 for measured data)
-    error_phi_o = phi_o[:, 0:-1] - phi_o_c[:, 0:-1]
-    error_theta_o = theta_o[:, 0:-1] - theta_o_c[:, 0:-1]
-    assert((error_phi_o < 1e-4).all())
-    assert((error_theta_o < 1e-4).all())
-
-    # Read a tensor file from disk
-    reference = "bin/spectralon_spec.bsdf"
-    tensor = read_tensor(reference)
-    spec_ref = tensor["spectra"]
-    wavelengths_ref = tensor["wavelengths"]
-    
-    error = np.abs(wavelengths_ref - wavelengths)
-    assert(wavelengths_ref.shape == wavelengths.shape)
-    assert((error < 1e-4).all())
+    theta_o, phi_o, active = outgoing_direction(R, R, Dvis_sampler, phi_i, theta_i, isotropic)
 
     # Jacobian weighted measuremnts
     if jacobian:
         # TODO: figure out how to include black/white level
         spec_c = weight_measurements(spec, D, sigma, phi_i, theta_i,
-                                     phi_o_c, theta_o_c, active)
+                                     phi_o, theta_o, active)
         # Horizontal slice of samples is interpolated
         # (set to 0 for measured data)
-        error = spec[:, 0:-1] - spec_c[:, 0:-1]
+        error = np.abs(spec_ref[:, 0:-1] - spec_c[:, 0:-1])
+        print(error)
+        print(error.max())
+
+
+# TODO: fix integration
+@pytest.mark.parametrize("filename", ["bin/spectralon_spec.bsdf"])
+def test14_luminance_isotropic(filename):
+    # Read tensor file from disc
+    tensor = read_tensor(filename)
+    spec = tensor["spectra"]
+    wavelengths = tensor["wavelengths"]
+    luminance = tensor["luminance"]
 
     # Luminace integration
-    luminance = tensor["luminance"]
-    luminance_c = integrate_spectrum(spec_ref, wavelengths_ref)
+    luminance_c = integrate_spectrum(spec, wavelengths)
     error = np.abs(luminance - luminance_c)
 
     assert(luminance.shape == luminance_c.shape)
     assert((error < 5e-1).all())
+
+
+@pytest.mark.parametrize("filename", ["bin/spectralon_spec.bsdf"])
+def test15_save_tensor(filename):
+    # Read tensor file from disc
+    tensor = read_tensor(filename)
+
+    # Copy dictionary and write to disc
+    tensor_c = dict()
+    for key in tensor:
+        tensor_c[key] = tensor[key]
+    output = "bin/out.bsdf"
+    write_tensor(output, **tensor_c)
+    tensor_c = read_tensor(output)
+
+    # Check dictionaries are equal
+    assert([key for key in tensor] == [key for key in tensor_c])
+    equal = True
+    for key in tensor:
+        equal &= (tensor_c[key] == tensor[key]).all()
+    assert(equal)
+
+
+
+
