@@ -108,12 +108,10 @@ def build_slope_kernel(frC, n_theta, n_phi, isotropic):
         for j in range(N):
             if omega_m[j, 2] > EPSILON:
                 # Calculate kernel
-                K_ = (frC * np.dot(omega_m, omega_m[j]).clip(0, None) 
+                K_ = (frC * np.dot(omega_m, omega_m[j]).clip(0, None)
                       / np.power(omega[j, 2], 4))
-                K[:, j] = K_ * np.power(omega[:,2], 4)           
+                K[:, j] = K_ * np.power(omega[:,2], 4)
     return K
-
-
 
 
 """
@@ -134,7 +132,6 @@ def normalize_slopes(P_in, isotropic):
     n_theta = P.shape[1]
     n_phi = P.shape[0]
     theta = u2theta(np.linspace(0, 1, n_theta))
-    phi = u2theta(np.linspace(0, 1, n_theta))
     if isotropic:
         dphi = 2 * np.pi
         tmp = np.zeros(n_theta)
@@ -156,7 +153,6 @@ def normalize_slopes(P_in, isotropic):
                 if cos_theta > EPSILON:
                     tmp[j] = r * P[i, j] / np.power(cos_theta, 2)
             integral += trapz(tmp, theta)  # integrate over dtheta
-        # TODO: check factor 2
         integral *= dphi  # integrate over dphi
     # Normalize PDF
     assert(integral > 0.)
@@ -390,6 +386,225 @@ def max_elevation(d, w):
 
 
 """
+Fit Beckmann parameters to normalized NDF slopes.
+Mean surface normals for non-centeral BRDFs are
+currently only implemented for anisotropic materials.
+params:
+    @P_in = normalized NDF slopes
+    @isotropic = material property isotropic
+return:
+    @a_x = x-dirction RMS slope
+    @a_y = y-dirction RMS slope
+    @rho = correlation coefficient
+    @x_n = mean surface normal x-component
+    @y_n = mean surface normal y-component
+"""
+def beckmann_parameters(P_in, isotropic):
+    from scipy.integrate import trapz
+    # Get dimensions from slope PDF
+    P = P_in
+    n_theta = P.shape[1]
+    n_phi = P.shape[0]
+    theta = u2theta(np.linspace(0, 1, n_theta))
+    phi = u2phi(np.linspace(0, 1, n_phi))
+    if isotropic:
+        tmp = np.zeros(n_theta)
+        for i in range(n_theta):
+            r = np.tan(theta[i])
+            cos_theta = np.cos(theta[i])
+            if cos_theta > EPSILON:
+                tmp[i] = np.power(r, 3) * P[0, i] / np.power(cos_theta, 2)
+        integral = trapz(tmp, theta)
+        integral *= np.pi               # = int_0^2pi(cos^2(phi))dphi
+        a_x = np.sqrt(2. * integral)
+        a_y = a_x
+        rho = 0
+        # TODO: add shear parameter to isotropic
+        x_n = 0
+        y_n = 0
+    else:
+        E = np.zeros(5)                 # moments for extracting Beckmann params
+        dphi = 2 * np.pi / (n_phi - 1)  # constant increments (phi[1]-phi[0])
+        for i in range(n_phi - 1):
+            cos_phi = np.cos(phi[i])
+            sin_phi = np.sin(phi[i])
+            tmp = np.zeros((5, n_theta))
+            for j in range(n_theta):
+                r = np.tan(theta[j])
+                r_sqr = np.power(r, 2)
+                cos_theta = np.cos(theta[j])
+                if cos_theta > EPSILON:
+                    tmp1 = r * P[i, j] / np.power(cos_theta, 2)
+                    tmp[0, j] = tmp1 * -r * cos_phi                     # x_n
+                    tmp[1, j] = tmp1 * -r * sin_phi                     # y_n
+                    tmp[2, j] = tmp1 * r_sqr * np.power(cos_phi, 2)
+                    tmp[3, j] = tmp1 * r_sqr * np.power(sin_phi, 2) 
+                    tmp[4, j] = tmp1 * r_sqr * sin_phi * cos_phi 
+            E += trapz(tmp, theta, axis=1)  # integrate over dtheta
+        E *= dphi   # integrate over dphi
+        x_n = E[0]
+        y_n = E[1]
+        a_x = np.sqrt(2. * (E[2] - np.power(x_n, 2)))
+        a_y = np.sqrt(2. * (E[3] - np.power(y_n, 2)))
+        rho = 2. * (E[4] - x_n * y_n) / (a_x * a_y)
+    return [a_x, a_y, rho, x_n, y_n]
+
+
+"""
+Fit GGX parameters to normalized NDF slopes.
+Mean surface normals for non-centeral BRDFs are
+currently only implemented for anisotropic materials.
+params:
+    @P_in = normalized NDF slopes
+    @isotropic = material property isotropic
+return:
+    @a_x = x-dirction RMS slope
+    @a_y = y-dirction RMS slope
+    @rho = correlation coefficient (not implemented)
+    @x_n = mean surface normal x-component
+    @y_n = mean surface normal y-component
+"""
+def ggx_parameters(P_in, isotropic):
+    from scipy.integrate import trapz
+    # Get dimensions from slope PDF
+    P = P_in
+    n_theta = P.shape[1]
+    n_phi = P.shape[0]
+    theta = u2theta(np.linspace(0, 1, n_theta))
+    phi = u2phi(np.linspace(0, 1, n_phi))
+    if isotropic:
+        tmp = np.zeros(n_theta)
+        for i in range(n_theta):
+            r = np.tan(theta[i])
+            cos_theta = np.cos(theta[i])
+            if cos_theta > EPSILON:
+                tmp[i] = np.power(r, 2) * P[0, i] / np.power(cos_theta, 2)
+        integral = trapz(tmp, theta)
+        integral *= 4.                  # = int_0^2pi(|cos(phi)|)dphi
+        a_x = integral
+        a_y = a_x
+        rho = 0
+        # TODO: add shear parameter to isotropic
+        x_n = 0
+        y_n = 0
+    else:
+        E = np.zeros(5)                 # moments for extracting Beckmann params
+        dphi = 2 * np.pi / (n_phi - 1)  # constant increments (phi[1]-phi[0])
+        for i in range(n_phi - 1):
+            cos_phi = np.cos(phi[i])
+            sin_phi = np.sin(phi[i])
+            tmp = np.zeros((5, n_theta))
+            for j in range(n_theta):
+                r = np.tan(theta[j])
+                cos_theta = np.cos(theta[j])
+                if cos_theta > EPSILON:
+                    tmp1 = r * P[i, j] / np.power(cos_theta, 2)
+                    tmp[0, j] = tmp1 * -r * cos_phi         # x_n
+                    tmp[1, j] = tmp1 * -r * sin_phi         # y_n
+                    tmp[2, j] = abs(tmp[0, j])
+                    tmp[3, j] = abs(tmp[1, j]) 
+                    tmp[4, j] = 0                           # TODO
+            E += trapz(tmp, theta, axis=1)  # integrate over dtheta
+        E *= dphi   # integrate over dphi
+        x_n = E[0]
+        y_n = E[1]
+        a_x = np.sqrt(np.power(E[2], 2) - np.power(x_n, 2))
+        a_y = np.sqrt(np.power(E[3], 2) - np.power(y_n, 2))
+        rho = 0     # TODO
+    return [a_x, a_y, rho, x_n, y_n]
+
+
+"""
+Evaluate micro-facet distribution model.
+Samples are warped by G2 mapping before
+converting to Carthesian direction and
+evaluating distribution model.
+params:
+    @n_theta = sample elevation resolution
+    @n_phi = sample azimuth resolution (if isotropic: ignored)
+    @alpha = roughness parameter (if isotropic: [alpha_x, alpha_y])
+    @isotropic = material property isotropic
+    @md_type = micro-facet model type ('beckmann' or 'ggx')
+return:
+    @D = sampled micro-facet distribution
+"""
+def eval_md_model(n_theta, n_phi, alpha, isotropic, md_type="beckmann"):
+    from mitsuba.render import MicrofacetDistribution, MicrofacetType
+    if md_type == "beckmann":
+        md_t = MicrofacetType.Beckmann
+    elif md_type == "ggx":
+        md_t = MicrofacetType.GGX
+    else:
+        print("WARNING: Unknown micro-facet type, returning None.")
+        return None
+    if isotropic:
+        m_D = MicrofacetDistribution(md_t, alpha[0], True)
+        _, _, omega = grid_sample(n_theta, 1)
+        D = m_D.eval(omega)
+        D = np.vstack((D, D))
+    else:
+        m_D = MicrofacetDistribution(md_t, alpha[0], alpha[1], True)
+        _, _, omega = grid_sample(n_theta, n_phi)
+        D = m_D.eval(omega)
+        D = np.reshape(D, (n_phi, n_theta))
+    return D
+
+
+def eval_beckmann(n_theta, n_phi, alpha, isotropic):
+    theta = u2theta(np.linspace(0, 1, n_theta))
+    if isotropic:
+        D = np.zeros((2, n_theta))
+        alpha_sqr = np.power(alpha[0], 2)
+        for i in range(n_theta):
+            cos_theta = np.cos(theta[i])
+            if cos_theta > EPSILON:
+                tmp = np.exp(-np.power(np.tan(theta[i]), 2) / alpha_sqr)
+                D[:, i] = tmp / (np.pi * alpha_sqr * np.power(cos_theta, 4)) 
+    return D
+
+
+def eval_ggx(n_theta, n_phi, alpha, isotropic):
+    theta = u2theta(np.linspace(0, 1, n_theta))
+    if isotropic:
+        D = np.zeros((2, n_theta))
+        alpha_sqr = np.power(alpha[0], 2)
+        for i in range(n_theta):
+            cos_theta = np.cos(theta[i])
+            tan_theta = np.tan(theta[i])
+            if cos_theta > EPSILON:
+                tmp = alpha_sqr / (np.pi * np.power(cos_theta, 4)) 
+                D[:, i] = tmp / np.power(alpha_sqr + np.power(tan_theta, 2), 2)
+    return D
+
+
+"""
+Evaluate micro-facet distribution.
+Specified resolution will be warped by G2 mapping,
+before converting to Carthesian direction.
+params:
+    @n_theta = sample elvation resolution
+    @n_phi = sample azimuth resolution (if isotropic: ignored)
+    @D_in = micro-facet NDF
+    @isotropic = material property isotropic
+return:
+    @D = sampled micro-facet NDF
+"""
+def eval_md(n_theta, n_phi, D_in, isotropic):
+    from mitsuba.render import MarginalContinuous2D0, Vector2f
+    m_D = MarginalContinuous2D0(D_in, normalize=False)
+    u = np.meshgrid(np.linspace(0, 1, n_theta), np.linspace(0, 1, n_phi))
+    u_0 = u[0].flatten()
+    u_1 = u[1].flatten()
+    samples = Vector2f(u_0, u_1)
+    D = m_D.eval(samples)
+    if isotropic:
+        D = np.vstack((D, D))
+    else:
+        D = np.reshape(D, (n_phi, n_theta))
+    return D
+
+
+"""
 Compute projected area of micro-facets as nomalisation
 
 params:
@@ -400,8 +615,7 @@ return:
     @sigma = projected area of micro-facets
 """
 def projected_area(D, isotropic, projected=True):
-    from mitsuba.core import Vector2f, Vector3f
-    from mitsuba.core import MarginalContinuous2D0
+    from mitsuba.core import MarginalContinuous2D0, Vector2f, Vector3f
 
     # Check dimensions of micro-facet model
     sigma = np.zeros(D.shape)
@@ -532,8 +746,7 @@ return:
     @Dvis visible NDF
 """
 def visible_ndf(D, sigma, theta_i, phi_i, isotropic):
-    from mitsuba.core import Vector2f
-    from mitsuba.core import MarginalContinuous2D0
+    from mitsuba.core import MarginalContinuous2D0, Vector2f
 
     # Construct projected surface area interpolant data structure
     m_sigma = MarginalContinuous2D0(sigma, normalize=False)
@@ -609,8 +822,7 @@ def ndf_intp2sample(D_intp):
 
 def normalize_4D(F, theta_i, phi_i):
     # Normalize function so that integral = 1
-    from mitsuba.core import Vector2f
-    from mitsuba.core import MarginalContinuous2D2
+    from mitsuba.core import MarginalContinuous2D2, Vector2f
     F_norm = np.zeros(F.shape)
     params = [phi_i.tolist(), theta_i.tolist()]
     # Construct projected surface area interpolant data structure
@@ -631,8 +843,7 @@ def normalize_4D(F, theta_i, phi_i):
 
 def normalize_2D(F):
     # Normalize function so that integral = 1
-    from mitsuba.core import Vector2f
-    from mitsuba.core import MarginalContinuous2D0
+    from mitsuba.core import MarginalContinuous2D0, Vector2f
     F_norm = np.zeros(F.shape)
     # Construct projected surface area interpolant data structure
     m_F_norm = MarginalContinuous2D0(F, normalize=True)

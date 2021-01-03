@@ -10,7 +10,8 @@ from brdf import (EPSILON, grid_sample, projected_area, sphere_surface_patch,
                   integrate_spectrum)
 import mitsuba
 # Set the any mitsuba variant
-mitsuba.set_variant('packet_spectral')
+mitsuba.set_variant('gpu_spectral')
+
 
 
 @pytest.mark.parametrize("n_theta", [128, 64])
@@ -154,10 +155,11 @@ def test07_ndf_isotropic(filename):
     # Reverse weight NDF
     D_c = np.zeros(D_c.shape)
     for i in range(n_theta):
-        if cos_theta[i] > np.power(EPSILON, 4):
+        if cos_theta[i] > np.power(EPSILON, 3):
             D_c[:, i] = D_cw[:, i] / cos_theta[i]
 
-    error = np.abs(D - D_c)
+    nef = D[0, 0] / D_cw[0, 0]      # Norm error factor (Mitsuba norm error)
+    error = np.abs(D - D_c * nef)
     #print(np.max(error))
 
     assert(D.shape == D_c.shape)
@@ -196,7 +198,7 @@ def test08_slopes_isotropic(filename):
 
     # Normalize
     P_c = normalize_slopes(P_c, isotropic)
-    
+
     # Get slopes from NDF
     P = np.zeros(D.shape)
     theta = np.power(np.linspace(0, 1, n_theta), 2) * (np.pi / 2)
@@ -209,6 +211,7 @@ def test08_slopes_isotropic(filename):
 
     assert(P.shape == P_c.shape)
     assert((error < 1e-2).all())
+
 
 @pytest.mark.parametrize("filename", ["bin/spectralon.pickle"])
 def test09_vndf_interpolate(filename):
