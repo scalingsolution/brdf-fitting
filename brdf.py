@@ -978,15 +978,15 @@ params:
     @n_phi = number of outgoing azimuth samples per incident direction slice
     @n_phi = number of outgoing elevation samples per incident direction slice
     @Dvis_sampler = jacobian corrected visible NDF for sample generation
-    @phi_i = incident azimuth [rad]
     @theta_i = incident elevation [rad]
+    @phi_i = incident azimuth [rad]
     @isotropic = material property isotropic
 return
     @theta_o = outgoing elevation [rad]
     @phi_o = outgoing azimuth [rad]
     @active = valid outgoing directions
 """
-def outgoing_direction(n_phi, n_theta, Dvis_sampler, phi_i, theta_i, isotropic):
+def outgoing_direction(n_phi, n_theta, Dvis_sampler, theta_i, phi_i, isotropic):
     from mitsuba.core import Vector2f, Frame3f
     from mitsuba.core import MarginalContinuous2D2
 
@@ -1044,15 +1044,15 @@ params:
     @spec = spectral measurements
     @D = micro-facet Normal Distribution Function (NDF)
     @sigma = projected area of micro-facets
-    @phi_i = incident azimuth [rad]
     @theta_i = incident elevation [rad]
+    @phi_i = incident azimuth [rad]
     @theta_o = outgoing elevation [rad]
     @phi_o = outgoing azimuth [rad]
     @active = valid outgoing directions
 return
     @scaled = weighted spectral measurements
 """
-def weight_measurements(spec, D, sigma, phi_i, theta_i, phi_o, theta_o, active):
+def weight_measurements(spec, D, sigma, theta_i, phi_i, theta_o, phi_o, active):
     from mitsuba.core import MarginalContinuous2D0, Vector2f
     m_ndf = MarginalContinuous2D0(D, normalize=False)
     m_sigma = MarginalContinuous2D0(sigma, normalize=False)

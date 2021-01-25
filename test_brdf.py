@@ -356,13 +356,13 @@ def test13_spectral_measurements_isotropic(filename):
 
 
     # Compute sample positions
-    theta_o, phi_o, active = outgoing_direction(R, R, Dvis_sampler, phi_i, theta_i, isotropic)
+    theta_o, phi_o, active = outgoing_direction(R, R, Dvis_sampler, theta_i, phi_i, isotropic)
 
     # Jacobian weighted measuremnts
     if jacobian:
         # TODO: figure out how to include black/white level
-        spec_c = weight_measurements(spec, D, sigma, phi_i, theta_i,
-                                     phi_o, theta_o, active)
+        spec_c = weight_measurements(spec, D, sigma, theta_i, phi_i,
+                                     theta_o, phi_o, active)
         # Horizontal slice of samples is interpolated
         # (set to 0 for measured data)
         error = np.abs(spec_ref[:, 0:-1] - spec_c[:, 0:-1])
