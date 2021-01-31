@@ -9,7 +9,7 @@ EPSILON = 1e-4
 Build kernel matrix for calculation of micro-facet
 Normal Distribution Function (NDF).
 params:
-    @frC = cosign weighted BSDF mesurements
+    @frC = cosine weighted BSDF mesurements
     @n_theta = number of elevation samples of input
     @n_phi = number of azimuth samples of input (or calculation if isotropic)
     @isotropic = material property isotropic
@@ -62,7 +62,7 @@ Build kernel matrix for calculation of slopes of
 micro-facet Normal Distribution Function (NDF).
 Corresponds to the Probability Density Function (PDF).
 params:
-    @frC = cosign weighted BSDF mesurements
+    @frC = cosine weighted BSDF mesurements
     @n_theta = number of elevation samples of input
     @n_phi = number of azimuth samples of input (or calculation if isotropic)
     @isotropic = material property isotropic
