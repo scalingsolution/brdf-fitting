@@ -719,7 +719,6 @@ def cartesian2spherical(w):
     # Convert: Cartesian coordinates -> Spherical
     theta  = elevation(w) #ek.acos(w.z)
     phi  = ek.atan2(w.y, w.x)
-    phi = ek.select(phi+ek.pi < 1e-4, ek.pi, phi)
     return theta, phi
 
 
@@ -981,16 +980,19 @@ params:
     @theta_i = incident elevation [rad]
     @phi_i = incident azimuth [rad]
     @isotropic = material property isotropic
+    @theta_max = maximum elevation of outgoing samples
 return
     @theta_o = outgoing elevation [rad]
     @phi_o = outgoing azimuth [rad]
     @active = valid outgoing directions
 """
-def outgoing_direction(n_phi, n_theta, Dvis_sampler, theta_i, phi_i, isotropic):
+def outgoing_direction(n_phi, n_theta, Dvis_sampler, theta_i, phi_i, isotropic,
+                       theta_max=np.pi):
     from mitsuba.core import Vector2f, Frame3f
     from mitsuba.core import MarginalContinuous2D2
+    
+    print("Max theta angle is %f deg." % np.degrees(theta_max))
 
-    MAX_ELEVATION = 85
     phi_o = np.zeros((phi_i.size, theta_i.size, n_phi, n_theta))
     theta_o = np.zeros((phi_i.size, theta_i.size, n_phi, n_theta))
     active = np.ones((phi_i.size, theta_i.size, n_phi, n_theta), dtype='bool')
@@ -1006,13 +1008,13 @@ def outgoing_direction(n_phi, n_theta, Dvis_sampler, theta_i, phi_i, isotropic):
 
     for i in range(phi_i.size):
         for j in range(theta_i.size):
-            # Warp uniform samples by VNDF distribution (G1 mapping) 
+            # Warp uniform samples by VNDF distribution (G1 mapping)
             u_m, ndf_pdf = m_vndf.sample(samples, [phi_i[i], theta_i[j]])
             # Convert samples to radians (G2 mapping)
             theta_m = u2theta(u_m.x)    # [0, 1] -> [0, pi]
             phi_m = u2phi(u_m.y)        # [0, 1] -> [0, 2pi]
             if isotropic:
-                phi_m += phi_i[i]               
+                phi_m += phi_i[i]
             # Phase vector
             m = spherical2cartesian(theta_m, phi_m)
             # Incident direction
@@ -1021,16 +1023,20 @@ def outgoing_direction(n_phi, n_theta, Dvis_sampler, theta_i, phi_i, isotropic):
             wo = ek.fmsub(m, 2.0 * ek.dot(m, wi), wi)
             tmp1, tmp2 = cartesian2spherical(wo)
             # Remove invalid directions
-            act = Frame3f.cos_theta(wo) > 0
-            act &= tmp1 < (MAX_ELEVATION / 180 * np.pi)
+            act = u_m.y > 0                       # covered twice [-pi = pi]
+            act &= Frame3f.cos_theta(wo) > 0      # below surface plane
+            act &= tmp1 <= (theta_max + EPSILON)  # further angular restriction
             if isotropic:
-                act &= tmp2 > 0 #, np.abs(tmp2) np.logical_or( - np.pi < 1e-4)
+                act &= tmp2 >= 0
+            tmp1[~act] = 0
+            tmp2[~act] = 0
+
             # Fit to datashape
             act = np.reshape(act, (n_phi, n_theta))
             tmp1 = np.reshape(tmp1, (n_phi, n_theta))
             tmp2 = np.reshape(tmp2, (n_phi, n_theta))
-            tmp1[~act] = 0
-            tmp2[~act] = 0
+
+            # Append
             theta_o[i, j] = tmp1
             phi_o[i, j] = tmp2
             active[i, j] = act
