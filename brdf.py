@@ -99,7 +99,7 @@ def build_slope_kernel(frC, n_theta, n_phi, isotropic):
 
                 # Calculate kernel
                 K_ = frC * integral / np.power(omega[j, 2], 4)
-                K[:, j] = K_ * omega[j, 0] * np.power(omega[:,2], 4)
+                K[:, j] = K_ * omega[j, 0] * np.power(omega[:, 2], 4)
     else:
         if (n_theta * n_phi) != N:
             raise("Error: Grid dimensions do not match BRDF mesurements!")
@@ -110,7 +110,7 @@ def build_slope_kernel(frC, n_theta, n_phi, isotropic):
                 # Calculate kernel
                 K_ = (frC * np.dot(omega_m, omega_m[j]).clip(0, None)
                       / np.power(omega[j, 2], 4))
-                K[:, j] = K_ * np.power(omega[:,2], 4)
+                K[:, j] = K_ * np.power(omega[:, 2], 4)
     return K
 
 
@@ -153,6 +153,7 @@ def normalize_slopes(P_in, isotropic):
                 if cos_theta > EPSILON:
                     tmp[j] = r * P[i, j] / np.power(cos_theta, 2)
             integral += trapz(tmp, theta)  # integrate over dtheta
+        # TODO: check factor 2
         integral *= dphi  # integrate over dphi
     # Normalize PDF
     assert(integral > 0.)
@@ -160,10 +161,11 @@ def normalize_slopes(P_in, isotropic):
     P *= integral
     return P
 
+
 """
 Fit Beckmann parameters to normalized NDF slopes.
 Mean surface normals for non-centeral BRDFs are
-currently only implemented for anisotropic materials. 
+currently only implemented for anisotropic materials.
 params:
     @P_in = normalized NDF slopes
     @isotropic = material property isotropic
@@ -181,7 +183,7 @@ def beckmann_parameters(P_in, isotropic):
     n_theta = P.shape[1]
     n_phi = P.shape[0]
     theta = u2theta(np.linspace(0, 1, n_theta))
-    phi = u2theta(np.linspace(0, 1, n_theta))
+    phi = u2phi(np.linspace(0, 1, n_phi))
     if isotropic:
         tmp = np.zeros(n_theta)
         for i in range(n_theta):
@@ -200,7 +202,7 @@ def beckmann_parameters(P_in, isotropic):
     else:
         E = np.zeros(5)                 # moments for extracting Beckmann params
         dphi = 2 * np.pi / (n_phi - 1)  # constant increments (phi[1]-phi[0])
-        for i in range(n_phi):
+        for i in range(n_phi - 1):
             cos_phi = np.cos(phi[i])
             sin_phi = np.sin(phi[i])
             tmp = np.zeros((5, n_theta))
@@ -208,7 +210,6 @@ def beckmann_parameters(P_in, isotropic):
                 r = np.tan(theta[j])
                 r_sqr = np.power(r, 2)
                 cos_theta = np.cos(theta[j])
-                sin_theta = np.sin(theta[j])
                 if cos_theta > EPSILON:
                     tmp1 = r * P[i, j] / np.power(cos_theta, 2)
                     tmp[0, j] = tmp1 * -r * cos_phi                     # x_n
@@ -230,7 +231,7 @@ def beckmann_parameters(P_in, isotropic):
 """
 Fit GGX parameters to normalized NDF slopes.
 Mean surface normals for non-centeral BRDFs are
-currently only implemented for anisotropic materials. 
+currently only implemented for anisotropic materials.
 params:
     @P_in = normalized NDF slopes
     @isotropic = material property isotropic
@@ -248,9 +249,8 @@ def ggx_parameters(P_in, isotropic):
     n_theta = P.shape[1]
     n_phi = P.shape[0]
     theta = u2theta(np.linspace(0, 1, n_theta))
-    phi = u2theta(np.linspace(0, 1, n_theta))
+    phi = u2phi(np.linspace(0, 1, n_phi))
     if isotropic:
-        dphi = 2 * np.pi
         tmp = np.zeros(n_theta)
         for i in range(n_theta):
             r = np.tan(theta[i])
@@ -268,15 +268,13 @@ def ggx_parameters(P_in, isotropic):
     else:
         E = np.zeros(5)                 # moments for extracting Beckmann params
         dphi = 2 * np.pi / (n_phi - 1)  # constant increments (phi[1]-phi[0])
-        for i in range(n_phi):
+        for i in range(n_phi - 1):
             cos_phi = np.cos(phi[i])
             sin_phi = np.sin(phi[i])
             tmp = np.zeros((5, n_theta))
             for j in range(n_theta):
                 r = np.tan(theta[j])
-                r_sqr = np.power(r, 2)
                 cos_theta = np.cos(theta[j])
-                sin_theta = np.sin(theta[j])
                 if cos_theta > EPSILON:
                     tmp1 = r * P[i, j] / np.power(cos_theta, 2)
                     tmp[0, j] = tmp1 * -r * cos_phi         # x_n
@@ -286,225 +284,6 @@ def ggx_parameters(P_in, isotropic):
                     tmp[4, j] = 0                           # TODO
             E += trapz(tmp, theta, axis=1)  # integrate over dtheta
         # TODO: check factor 2
-        E *= dphi   # integrate over dphi
-        x_n = E[0]
-        y_n = E[1]
-        a_x = np.sqrt(np.power(E[2], 2) - np.power(x_n, 2))
-        a_y = np.sqrt(np.power(E[3], 2) - np.power(y_n, 2))
-        rho = 0     # TODO
-    return [a_x, a_y, rho, x_n, y_n]
-
-
-"""
-Evaluate micro-facet distribution model.
-Samples are warped by G2 mapping before
-converting to Carthesian direction and
-evaluating distribution model.
-params:
-    @n_theta = sample elevation resolution
-    @n_phi = sample azimuth resolution (if isotropic: ignored)
-    @alpha = roughness parameter (if isotropic: [alpha_x, alpha_y])
-    @isotropic = material property isotropic
-    @md_type = micro-facet model type ('beckmann' or 'ggx')
-return:
-    @D = sampled micro-facet distribution
-"""
-def eval_md_model(n_theta, n_phi, alpha, isotropic, md_type="beckmann"):
-    from mitsuba.render import MicrofacetDistribution, MicrofacetType
-    if md_type == "beckmann":
-        md_t = MicrofacetType.Beckmann
-    elif md_type == "ggx":
-        md_t = MicrofacetType.GGX
-    else:
-        print("WARNING: Unknown micro-facet type, returning None.")
-        return None
-    if isotropic:
-        m_D = MicrofacetDistribution(md_t, alpha, False)
-        _, _, omega = grid_sample(n_theta, 1)
-        D = m_D.eval(omega)
-        D = np.vstack((D, D))
-    else:
-        m_D = MicrofacetDistribution(md_t, alpha[0], alpha[1], False)
-        _, _, omega = grid_sample(n_theta, n_phi)
-        D = m_D.eval(omega)
-        D = np.reshape(D, (n_phi, n_theta))
-    #print(alpha)
-    #print(omega)
-    return D
-
-
-"""
-Evaluate micro-facet distribution.
-Specified resolution will be warped by G2 mapping,
-before converting to Carthesian direction.
-params:
-    @n_theta = sample elvation resolution
-    @n_phi = sample azimuth resolution (if isotropic: ignored)
-    @D_in = micro-facet NDF
-    @isotropic = material property isotropic
-return:
-    @D = sampled micro-facet NDF
-"""
-def eval_md(n_theta, n_phi, D_in, isotropic):
-    from mitsuba.render import MarginalContinuous2D0
-    m_D = MarginalContinuous2D0(D_in, normalize=False)
-    u = np.meshgrid(np.linspace(0, 1, n_theta), np.linspace(0, 1, n_phi))
-    u_0 = u[0].flatten()
-    u_1 = u[1].flatten()
-    sample = Vector2f(u_0, u_1)
-    D = m_D.eval(samples)
-    if isotropic:
-        D = np.vstack((D, D))
-    else:
-        D = np.reshape(D, (n_phi, n_theta))
-    return D
-
-
-"""
-Return major axis of laser spot on probe from
-laser beam diameter and incident elevation.
-params:
-    @d = laser beam diameter
-    @theta = incident elevation (on probe)
-return:
-    laser spot major axis (on probe)
-"""
-def effective_spot_size(d, theta):
-    return d / np.sin(theta) 
-
-"""
-Return maximal elevation for retroreflective measurements,
-based on laser beam diameter and probe diameter.
-params:
-    @d = laser beam diameter
-    @w = width of probe in rotation direction
-return:
-    maximal elevation angle (on probe)
-"""
-def max_elevation(d, w):
-    return np.arcsin(d / w)
-
-
-"""
-Fit Beckmann parameters to normalized NDF slopes.
-Mean surface normals for non-centeral BRDFs are
-currently only implemented for anisotropic materials.
-params:
-    @P_in = normalized NDF slopes
-    @isotropic = material property isotropic
-return:
-    @a_x = x-dirction RMS slope
-    @a_y = y-dirction RMS slope
-    @rho = correlation coefficient
-    @x_n = mean surface normal x-component
-    @y_n = mean surface normal y-component
-"""
-def beckmann_parameters(P_in, isotropic):
-    from scipy.integrate import trapz
-    # Get dimensions from slope PDF
-    P = P_in
-    n_theta = P.shape[1]
-    n_phi = P.shape[0]
-    theta = u2theta(np.linspace(0, 1, n_theta))
-    phi = u2phi(np.linspace(0, 1, n_phi))
-    if isotropic:
-        tmp = np.zeros(n_theta)
-        for i in range(n_theta):
-            r = np.tan(theta[i])
-            cos_theta = np.cos(theta[i])
-            if cos_theta > EPSILON:
-                tmp[i] = np.power(r, 3) * P[0, i] / np.power(cos_theta, 2)
-        integral = trapz(tmp, theta)
-        integral *= np.pi               # = int_0^2pi(cos^2(phi))dphi
-        a_x = np.sqrt(2. * integral)
-        a_y = a_x
-        rho = 0
-        # TODO: add shear parameter to isotropic
-        x_n = 0
-        y_n = 0
-    else:
-        E = np.zeros(5)                 # moments for extracting Beckmann params
-        dphi = 2 * np.pi / (n_phi - 1)  # constant increments (phi[1]-phi[0])
-        for i in range(n_phi - 1):
-            cos_phi = np.cos(phi[i])
-            sin_phi = np.sin(phi[i])
-            tmp = np.zeros((5, n_theta))
-            for j in range(n_theta):
-                r = np.tan(theta[j])
-                r_sqr = np.power(r, 2)
-                cos_theta = np.cos(theta[j])
-                if cos_theta > EPSILON:
-                    tmp1 = r * P[i, j] / np.power(cos_theta, 2)
-                    tmp[0, j] = tmp1 * -r * cos_phi                     # x_n
-                    tmp[1, j] = tmp1 * -r * sin_phi                     # y_n
-                    tmp[2, j] = tmp1 * r_sqr * np.power(cos_phi, 2)
-                    tmp[3, j] = tmp1 * r_sqr * np.power(sin_phi, 2) 
-                    tmp[4, j] = tmp1 * r_sqr * sin_phi * cos_phi 
-            E += trapz(tmp, theta, axis=1)  # integrate over dtheta
-        E *= dphi   # integrate over dphi
-        x_n = E[0]
-        y_n = E[1]
-        a_x = np.sqrt(2. * (E[2] - np.power(x_n, 2)))
-        a_y = np.sqrt(2. * (E[3] - np.power(y_n, 2)))
-        rho = 2. * (E[4] - x_n * y_n) / (a_x * a_y)
-    return [a_x, a_y, rho, x_n, y_n]
-
-
-"""
-Fit GGX parameters to normalized NDF slopes.
-Mean surface normals for non-centeral BRDFs are
-currently only implemented for anisotropic materials.
-params:
-    @P_in = normalized NDF slopes
-    @isotropic = material property isotropic
-return:
-    @a_x = x-dirction RMS slope
-    @a_y = y-dirction RMS slope
-    @rho = correlation coefficient (not implemented)
-    @x_n = mean surface normal x-component
-    @y_n = mean surface normal y-component
-"""
-def ggx_parameters(P_in, isotropic):
-    from scipy.integrate import trapz
-    # Get dimensions from slope PDF
-    P = P_in
-    n_theta = P.shape[1]
-    n_phi = P.shape[0]
-    theta = u2theta(np.linspace(0, 1, n_theta))
-    phi = u2phi(np.linspace(0, 1, n_phi))
-    if isotropic:
-        tmp = np.zeros(n_theta)
-        for i in range(n_theta):
-            r = np.tan(theta[i])
-            cos_theta = np.cos(theta[i])
-            if cos_theta > EPSILON:
-                tmp[i] = np.power(r, 2) * P[0, i] / np.power(cos_theta, 2)
-        integral = trapz(tmp, theta)
-        integral *= 4.                  # = int_0^2pi(|cos(phi)|)dphi
-        a_x = integral
-        a_y = a_x
-        rho = 0
-        # TODO: add shear parameter to isotropic
-        x_n = 0
-        y_n = 0
-    else:
-        E = np.zeros(5)                 # moments for extracting Beckmann params
-        dphi = 2 * np.pi / (n_phi - 1)  # constant increments (phi[1]-phi[0])
-        for i in range(n_phi - 1):
-            cos_phi = np.cos(phi[i])
-            sin_phi = np.sin(phi[i])
-            tmp = np.zeros((5, n_theta))
-            for j in range(n_theta):
-                r = np.tan(theta[j])
-                cos_theta = np.cos(theta[j])
-                if cos_theta > EPSILON:
-                    tmp1 = r * P[i, j] / np.power(cos_theta, 2)
-                    tmp[0, j] = tmp1 * -r * cos_phi         # x_n
-                    tmp[1, j] = tmp1 * -r * sin_phi         # y_n
-                    tmp[2, j] = abs(tmp[0, j])
-                    tmp[3, j] = abs(tmp[1, j]) 
-                    tmp[4, j] = 0                           # TODO
-            E += trapz(tmp, theta, axis=1)  # integrate over dtheta
         E *= dphi   # integrate over dphi
         x_n = E[0]
         y_n = E[1]
@@ -548,6 +327,31 @@ def eval_md_model(n_theta, n_phi, alpha, isotropic, md_type="beckmann"):
         D = m_D.eval(omega)
         D = np.reshape(D, (n_phi, n_theta))
     return D
+
+
+"""
+Return major axis of laser spot on probe from
+laser beam diameter and incident elevation.
+params:
+    @d = laser beam diameter
+    @theta = incident elevation (on probe)
+return:
+    laser spot major axis (on probe)
+"""
+def effective_spot_size(d, theta):
+    return d / np.sin(theta) 
+
+"""
+Return maximal elevation for retroreflective measurements,
+based on laser beam diameter and probe diameter.
+params:
+    @d = laser beam diameter
+    @w = width of probe in rotation direction
+return:
+    maximal elevation angle (on probe)
+"""
+def max_elevation(d, w):
+    return np.arcsin(d / w)
 
 
 def eval_beckmann(n_theta, n_phi, alpha, isotropic):
@@ -648,7 +452,6 @@ def projected_area(D, isotropic, projected=True):
     for i in range(n_theta):
         a[i]  = sphere_surface_patch(1, theta_mean[i:i+2], phi[-3:-1])
 
-
     # Calculate constants for integration
     for j in range(n_phi):
         # Interpolation points
@@ -712,7 +515,7 @@ def spherical2cartesian(theta, phi):
 
 def elevation(d):
     dist = ek.sqrt(ek.sqr(d.x) + ek.sqr(d.y) + ek.sqr(d.z - 1.))
-    return 2. * ek.safe_asin(.5 * dist);
+    return 2. * ek.safe_asin(.5 * dist)
 
 
 def cartesian2spherical(w):
@@ -840,7 +643,7 @@ def normalize_4D(F, theta_i, phi_i):
     return F_norm
 
 
-def normalize_2D(F):
+def normalize_2D(F, isotropic=True):
     # Normalize function so that integral = 1
     from mitsuba.core import MarginalContinuous2D0, Vector2f
     F_norm = np.zeros(F.shape)
@@ -852,9 +655,15 @@ def normalize_2D(F):
     u_2 = np.linspace(0, 1, F_norm.shape[0])
 
     # Sample normalized mapping
-    for k in range(F_norm.shape[0]):
-        sample = Vector2f(u_1, u_2[k])
-        F_norm[k] = m_F_norm.eval(sample)
+    if isotropic:
+        sample = Vector2f(u_1, u_2[0])
+        F_norm[0] = m_F_norm.eval(sample)
+        F_norm[1] = F_norm[0]
+    else:
+        for k in range(F_norm.shape[0]):
+            sample = Vector2f(u_1, u_2[k])
+            F_norm[k] = m_F_norm.eval(sample)
+            print(sample, m_F_norm.eval(sample))
     return F_norm
 
 
@@ -925,9 +734,9 @@ params:
     @n_theta = uniform samples on u1 (theta dimension)
     @n_phi = uniform samples on u2 (phi dimension)
 return
-    @theta_m = elevation samples
-    @phi_m = azimuth samples
-    @omega_m = ray directions
+    @theta = elevation samples
+    @phi = azimuth samples
+    @omega = ray directions
 """
 def grid_sample(n_theta, n_phi):
     # Create uniform samples and warp by G2 mapping
@@ -957,6 +766,7 @@ return
 def incident_elevation(n, sigma):
     from mitsuba.core import Float, Vector2f
     from mitsuba.core import MarginalContinuous2D0
+
     # Construct projected surface area interpolant data structure
     sigma_sampler = ndf_intp2sample(sigma)
     m_sigma = MarginalContinuous2D0(sigma_sampler, normalize=False)
@@ -987,14 +797,15 @@ return
     @active = valid outgoing directions
 """
 def outgoing_direction(n_phi, n_theta, Dvis_sampler, theta_i, phi_i, isotropic,
-                       theta_max=np.pi):
+                       theta_max=np.pi/2, all=False):
     from mitsuba.core import Vector2f, Frame3f
     from mitsuba.core import MarginalContinuous2D2
-    
+
     print("Max theta angle is %f deg." % np.degrees(theta_max))
 
     phi_o = np.zeros((phi_i.size, theta_i.size, n_phi, n_theta))
     theta_o = np.zeros((phi_i.size, theta_i.size, n_phi, n_theta))
+    invalid = np.ones((phi_i.size, theta_i.size, n_phi, n_theta), dtype='bool')
     active = np.ones((phi_i.size, theta_i.size, n_phi, n_theta), dtype='bool')
 
     # Create uniform samples
@@ -1024,23 +835,30 @@ def outgoing_direction(n_phi, n_theta, Dvis_sampler, theta_i, phi_i, isotropic,
             tmp1, tmp2 = cartesian2spherical(wo)
             # Remove invalid directions
             act = u_m.y > 0                       # covered twice [-pi = pi]
-            act &= Frame3f.cos_theta(wo) > 0      # below surface plane
+            inv = Frame3f.cos_theta(wo) < 0       # below surface plane
+            act &= np.invert(inv)                 # above surface plane
             act &= tmp1 <= (theta_max + EPSILON)  # further angular restriction
             if isotropic:
                 act &= tmp2 >= 0
-            tmp1[~act] = 0
-            tmp2[~act] = 0
+            if not all:
+                tmp1[~act] = 0
+                tmp2[~act] = 0
+            else:
+                tmp1[inv] = 0
+                tmp2[inv] = 0
 
             # Fit to datashape
             act = np.reshape(act, (n_phi, n_theta))
+            inv = np.reshape(inv, (n_phi, n_theta))
             tmp1 = np.reshape(tmp1, (n_phi, n_theta))
             tmp2 = np.reshape(tmp2, (n_phi, n_theta))
 
             # Append
+            active[i, j] = act
+            invalid[i, j] = inv
             theta_o[i, j] = tmp1
             phi_o[i, j] = tmp2
-            active[i, j] = act
-    return [theta_o, phi_o, active]
+    return [theta_o, phi_o, active, invalid]
 
 
 """
@@ -1058,20 +876,20 @@ params:
 return
     @scaled = weighted spectral measurements
 """
-def weight_measurements(spec, D, sigma, theta_i, phi_i, theta_o, phi_o, active):
+def weight_measurements(spec, D, sigma, theta_i, phi_i, theta_o, phi_o,
+                        active=None):
     from mitsuba.core import MarginalContinuous2D0, Vector2f
     m_ndf = MarginalContinuous2D0(D, normalize=False)
     m_sigma = MarginalContinuous2D0(sigma, normalize=False)
     scaled = np.zeros(spec.shape)
-    n_wavelengths = spec.shape[2]
-    n_phi = spec.shape[3]
-    n_theta = spec.shape[4]
+    n_phi = spec.shape[-2]
+    n_theta = spec.shape[-1]
 
     for i in range(phi_i.size):
         for j in range(theta_i.size):
             # Incient direction
             wi = spherical2cartesian(theta_i[j], phi_i[i])
-            u_wi = Vector2f(theta2u(theta_i[j]), phi2u(phi_i[i]))   
+            u_wi = Vector2f(theta2u(theta_i[j]), phi2u(phi_i[i]))
             # Outgoing direction
             wo = spherical2cartesian(theta_o[i, j].flatten(), phi_o[i, j].flatten())
             # Phase direction
@@ -1080,37 +898,66 @@ def weight_measurements(spec, D, sigma, theta_i, phi_i, theta_o, phi_o, active):
             u_m = Vector2f(theta2u(theta_m), phi2u(phi_m))
             # Scale by inverse jacobian
             jacobian = m_ndf.eval(u_m) / (4 * m_sigma.eval(u_wi))
-            jacobian = np.reshape(jacobian, (n_phi, n_theta))
-            for k in range(n_wavelengths): 
-                scaled[i, j, k] = spec[i, j, k] / jacobian
-    for k in range(n_wavelengths): 
-        scaled[:, :, k][~active] = 0 
+            scaled[i, j] = spec[i, j] / np.reshape(jacobian, (n_phi, n_theta))
+    if not active is None:
+        n_wavelenths = spec.shape[2]
+        for i in range(n_wavelenths):
+            scaled[:, :, i][~active] = 0
     return scaled
 
 
 """
-Calculate luminoscity of spectral measurements, by integrating
+Calculate luminance of spectral measurements, by integrating
 over wavelength range.
 
 params:
     @spec = spectral measurements
     @wavelengths = wavelengths used for spectral measurements
+    @theta_i = elecvation of incident direction
+    @phi_i = azimuth of incident direction
+    @lum = luminance (visible wavelengths, should probably be * CIE Y)
 return
-    @luminoscity = luminoscity
+    @luminance = luminance
 """
-def integrate_spectrum(spec, wavelengths):
+def integrate_spectrum(spec, wavelengths, theta_i, phi_i, lum=False):
     from scipy.integrate import trapz
     n_phi_i = spec.shape[0]
     n_theta_i = spec.shape[1]
     n_phi_o = spec.shape[3]
     n_theta_o = spec.shape[4]
-    luminoscity = np.zeros((n_phi_i, n_theta_i, n_phi_o, n_theta_o))
-    x = wavelengths #np.repeat(wavelengths, n_phi_o * n_theta_o)
+    luminance = np.zeros((n_phi_i, n_theta_i, n_phi_o, n_theta_o))
+    x = wavelengths
+    if lum:
+        p = wavelengths <= 830
+        x = x[p]
     span = x.max() - x.min()
     for i in range(n_phi_i):
         for j in range(n_theta_i):
-            y = spec[i, j]
+            y = spec[i, j][p] if lum else spec[i, j]
             y.reshape(-1, *y.shape[-2:])
             integral = trapz(y, x, axis=0) / span
-            luminoscity[i, j] = np.reshape(integral, (n_phi_o, n_theta_o))
-    return luminoscity
+            luminance[i, j] = np.reshape(integral, (n_phi_o, n_theta_o))
+    return normalize_2D2(luminance, theta_i, phi_i)
+
+
+def normalize_2D2(func, theta_i, phi_i):
+    from mitsuba.core import MarginalContinuous2D2, Vector2f
+    params = [phi_i.tolist(), theta_i.tolist()]
+    m_func = MarginalContinuous2D2(func, params, normalize=True)
+
+    n_phi_o = func.shape[2]
+    n_theta_o = func.shape[3]
+
+    normalized = np.zeros(func.shape)
+    # Create uniform samples
+    u_0 = np.linspace(0, 1, n_theta_o)
+    u_1 = np.linspace(0, 1, n_phi_o)
+    samples = Vector2f(np.tile(u_0, n_phi_o), np.repeat(u_1, n_theta_o))
+
+    for i in range(phi_i.size):
+        for j in range(theta_i.size):
+            # Warp uniform samples by VNDF distribution (G1 mapping)
+            normalized[i, j] = np.reshape(m_func.eval(samples,
+                                                      [phi_i[i], theta_i[j]]),
+                                          (n_phi_o, n_theta_o))
+    return normalized
